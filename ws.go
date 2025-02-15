@@ -116,6 +116,12 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if jsonMessage.State == "START_GAME" {
+			client.JoinedRoom.Game = newGame()
+
+			for _, c := range allRooms[client.JoinedRoom.ID].Players {
+				c.Conn.WriteJSON(map[string]bool{"isX": false})
+				c.IsX = false
+			}
 			client.JoinedRoom.Game.GameIsRunning = true
 			client.JoinedRoom.TurnCount = 1
 
@@ -131,10 +137,12 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			for _, c := range allRooms[client.JoinedRoom.ID].Players {
 				c.Conn.WriteJSON(map[string]bool{"isX": c.IsX})
 				c.Conn.WriteJSON(map[string]Game{"game": client.JoinedRoom.Game})
+				c.Conn.WriteJSON(map[string]int8{"winner": -1})
 			}
 
 			for _, c := range allRooms[client.JoinedRoom.ID].Spectators {
 				c.Conn.WriteJSON(map[string]Game{"game": client.JoinedRoom.Game})
+				c.Conn.WriteJSON(map[string]int8{"winner": -1})
 			}
 
 		}
@@ -151,6 +159,20 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 				client.JoinedRoom.Game.Blocks[pos] = 1
 			} else {
 				client.JoinedRoom.Game.Blocks[pos] = 2
+			}
+
+			winner := CheckWinner(client.JoinedRoom.Game, client.IsX)
+
+			if winner != -1 {
+				client.JoinedRoom.Game.GameIsRunning = false
+
+				for _, c := range allRooms[client.JoinedRoom.ID].Players {
+					c.Conn.WriteJSON(map[string]int8{"winner": winner})
+				}
+
+				for _, c := range allRooms[client.JoinedRoom.ID].Spectators {
+					c.Conn.WriteJSON(map[string]int8{"winner": winner})
+				}
 			}
 
 			for _, c := range allRooms[client.JoinedRoom.ID].Players {
@@ -233,5 +255,15 @@ func newRoom(id, name string) *Room {
 		Name:       name,
 		Players:    make(map[string]*Client),
 		Spectators: make(map[string]*Client),
+		Game:       newGame(),
+	}
+}
+
+func newGame() Game {
+	return Game{
+		GameIsRunning: false,
+		TurnCount:     0,
+		Blocks:        [9]uint8{},
+		XPlays:        false,
 	}
 }
