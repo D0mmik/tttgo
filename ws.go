@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/google/uuid"
 	"log"
 	"math/rand/v2"
 	"net/http"
+	"strconv"
 
 	"github.com/gorilla/websocket"
 )
@@ -18,17 +20,30 @@ var upgrader = websocket.Upgrader{
 }
 
 type Client struct {
+	ID         string
 	Name       string
-	Conn       websocket.Conn
+	Conn       *websocket.Conn
 	JoinedRoom *Room
 	IsPlayer   bool
+	IsLeader   bool
+	Ready      bool
+	IsX        bool
 }
 
 type Room struct {
 	ID         string
 	Name       string
-	Players    map[*Client]bool
-	Spectators map[*Client]bool
+	Players    map[string]*Client
+	ReadyCount int
+	Spectators map[string]*Client
+	Game
+}
+
+type Game struct {
+	GameIsRunning bool     `json:"gameIsRunning"`
+	TurnCount     uint8    `json:"turnCount"`
+	Blocks        [9]uint8 `json:"blocks"`
+	XPlays        bool     `json:"xPlays"`
 }
 
 type BroadcastRoomData struct {
@@ -36,6 +51,7 @@ type BroadcastRoomData struct {
 	Name      string `json:"name"`
 	UserCount int    `json:"userCount"`
 	IsPlayer  bool   `json:"isPlayer"`
+	IsLeader  bool   `json:"isLeader"`
 }
 
 type JSONMessage struct {
@@ -86,11 +102,65 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			LeaveGame(client)
 		}
 
-		// send message to every client in room
-		if client.JoinedRoom != nil {
-			for c := range allRooms[client.JoinedRoom.ID].Players {
-				c.Conn.WriteMessage(websocket.TextMessage, []byte("Autobus"))
+		if jsonMessage.State == "READY" {
+			if !client.IsPlayer {
+				return
 			}
+
+			client.Ready = true
+			client.JoinedRoom.ReadyCount += 1
+
+			for _, c := range allRooms[client.JoinedRoom.ID].Players {
+				c.Conn.WriteJSON(map[string]int{"readyCount": client.JoinedRoom.ReadyCount})
+			}
+		}
+
+		if jsonMessage.State == "START_GAME" {
+			client.JoinedRoom.Game.GameIsRunning = true
+			client.JoinedRoom.TurnCount = 1
+
+			r := rand.IntN(2) + 1
+			i := 1
+
+			for _, p := range client.JoinedRoom.Players {
+				p.IsX = i == r
+				client.JoinedRoom.XPlays = i == r
+				i += 1
+			}
+
+			for _, c := range allRooms[client.JoinedRoom.ID].Players {
+				c.Conn.WriteJSON(map[string]bool{"isX": c.IsX})
+				c.Conn.WriteJSON(map[string]Game{"game": client.JoinedRoom.Game})
+			}
+
+			for _, c := range allRooms[client.JoinedRoom.ID].Spectators {
+				c.Conn.WriteJSON(map[string]Game{"game": client.JoinedRoom.Game})
+			}
+
+		}
+
+		if jsonMessage.State == "GAME_MOVE" {
+			if !client.IsPlayer {
+				return
+			}
+
+			pos, _ := strconv.Atoi(jsonMessage.Value)
+			client.JoinedRoom.TurnCount += 1
+			client.JoinedRoom.XPlays = !client.JoinedRoom.XPlays
+			if client.IsX {
+				client.JoinedRoom.Game.Blocks[pos] = 1
+			} else {
+				client.JoinedRoom.Game.Blocks[pos] = 2
+			}
+
+			for _, c := range allRooms[client.JoinedRoom.ID].Players {
+				c.Conn.WriteJSON(map[string]Game{"game": client.JoinedRoom.Game})
+			}
+
+			for _, c := range allRooms[client.JoinedRoom.ID].Spectators {
+				c.Conn.WriteJSON(map[string]Game{"game": client.JoinedRoom.Game})
+			}
+
 		}
 
 	}
@@ -154,14 +224,14 @@ func broadcastStart(conn *websocket.Conn) {
 }
 
 func newClient(conn *websocket.Conn, name string) *Client {
-	return &Client{Conn: *conn, Name: name}
+	return &Client{ID: uuid.NewString(), Conn: conn, Name: name}
 }
 
 func newRoom(id, name string) *Room {
 	return &Room{
 		ID:         id,
 		Name:       name,
-		Players:    make(map[*Client]bool),
-		Spectators: make(map[*Client]bool),
+		Players:    make(map[string]*Client),
+		Spectators: make(map[string]*Client),
 	}
 }

@@ -8,17 +8,21 @@ import (
 
 func CreateGame(client *Client, jsonMessage JSONMessage, conn *websocket.Conn) {
 	room := newRoom(uuid.NewString(), jsonMessage.Value)
+	client.Ready = false
 
-	room.Players[client] = true
+	room.Players[client.ID] = client
 	client.JoinedRoom = room
 
 	allRooms[room.ID] = room
+	client.IsPlayer = true
+	client.IsLeader = true
 
 	conn.WriteJSON(map[string]interface{}{"joinedRoom": BroadcastRoomData{
 		ID:        room.ID,
 		Name:      room.Name,
 		UserCount: len(room.Players),
-		IsPlayer:  true,
+		IsPlayer:  client.IsPlayer,
+		IsLeader:  client.IsLeader,
 	}})
 
 	broadcastRooms()
@@ -26,13 +30,13 @@ func CreateGame(client *Client, jsonMessage JSONMessage, conn *websocket.Conn) {
 
 func JoinGame(client *Client, jsonMessage JSONMessage, conn *websocket.Conn) {
 	room := allRooms[jsonMessage.Value]
-	log.Println(len(room.Players))
+	client.Ready = false
 
 	if len(room.Players) < 2 {
-		room.Players[client] = true
+		room.Players[client.ID] = client
 		client.IsPlayer = true
 	} else {
-		room.Spectators[client] = true
+		room.Spectators[client.ID] = client
 		client.IsPlayer = false
 	}
 
@@ -57,12 +61,12 @@ func LeaveGame(client *Client) {
 	}
 	room := allRooms[client.JoinedRoom.ID]
 
-	_, playerExists := room.Players[client]
+	_, playerExists := room.Players[client.ID]
 
 	if playerExists {
-		delete(room.Players, client)
+		delete(room.Players, client.ID)
 	} else {
-		delete(room.Spectators, client)
+		delete(room.Spectators, client.ID)
 	}
 	broadcastRooms()
 }
